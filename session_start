@@ -1,0 +1,147 @@
+#!/usr/bin/perl
+
+use feature qw(say state switch);
+use Getopt::Long;
+use Cwd;
+use File::Basename;
+use Data::Dumper;
+use strict;
+
+my ( $project_name, $port, $help );
+GetOptions(
+    "name=s" => \$project_name,
+    "port=i" => \$port,
+    "help" => \$help,
+);
+
+my ($session);
+
+# 此專案的名稱 - 用於開 tmux 時使用
+$project_name //= "toppath";
+# server 所在路徑
+my $server_path //= "~/toppath/statt-game/statt_server/server/app";
+# gm 所在路徑
+my $gm_path //= "~/toppath/statt-game/statt_gm/server/app";
+# inspect_port
+$port //= 4001;
+
+$session = $project_name;
+
+if ( $help ) {
+    usage();
+    exit();
+}
+
+my $server_list = {
+    server => {
+        path => $server_path,
+        inspect_port => 1001,
+        app_list => [
+            "bstApp.js",
+            "gwApp.js",
+            "gsApp.js ",
+            "apiApp.js",
+            "swApp.js",
+            "swMonitorApp.js",
+            "calApp.js",
+            "calApp_match.js",
+            "gtsApp.js",
+            "monitorApp.js"
+        ],
+    },
+    gm => {
+        path => $gm_path,
+        inspect_port => 2001,
+        app_list => [
+            "adminApp.js",
+            "channelApp.js",
+        ],
+    },
+};
+
+sub real {
+    # run 單獨的 process 不使用 tmux
+
+    if ( !in_list($ARGV[0], ["server", "gm"]) ) {
+        my $dir = getcwd();
+        my $cmd = "node $dir/$ARGV[0] " . ($port ? "--port=$port" : "");
+        print "[run_server:$ARGV[0]] cmd : $cmd \n";
+        system $cmd;
+        exit;
+    }
+
+    # 如果是在 tmux 內 則不可啟動
+    return print "Error: cannot start session from within tmux." if ( system("\$TMUX") );
+
+    # 開新的 session 如果已經有的就跳過此步驟 (有的話是 0, 沒有的話是256)
+    return say "Session $session exists." if (!system("tmux has-session -t $session 2> /dev/null"));
+
+    system "tmux new-session -d -s $session";
+
+    if ( !$ARGV[0] ) {
+        run_server($server_list->{server});
+        run_server($server_list->{gm});
+    } elsif ( $ARGV[0] == "server" || $ARGV[0] == "gm") {
+        run_server($server_list->{$ARGV[0]});
+    } else {
+        print "unexcept server " . $ARGV[0] . " ... \n";
+        exit;
+    }
+
+    system("tmux attach -t $project_name");
+}
+
+sub run_server {
+    my ($server_list) = @_;
+    my ($path, $inspect_port, $app_list) = @{$server_list}{qw(path inspect_port app_list)};
+
+    my $count = 0;
+    for my $appName ( @$app_list ) {
+        my $cmd = "node $path/$appName " . ($inspect_port ? "--port=". ($inspect_port + ($count++)) : "" );
+        run_in_window($appName, $cmd);
+        print "[run_server:$appName] cmd : $cmd \n";
+        sleep 1;
+    }
+}
+
+sub run_in_window {
+    my ($name, $cmd) = @_;
+
+    if ( !system("tmux list-windows -t $session -F '#{window_name}' | grep \"^$name\$\" >/dev/null") ) {
+        # 已經有此名稱的 window 。 0: 已經存在, 256 尚未存在
+        say "Already running: $name";
+    } else {
+        print "Starting $name ... $cmd\n";
+		say "-------";
+
+		# Create new window and run command.
+		system("tmux new-window -t $session -n $name $cmd");
+    }
+}
+
+sub in_list {
+    my ($val, $list) = @_;
+
+    if ( 'ARRAY' eq ref $list ) {
+        return scalar grep { $val == $_ } @$list;
+    } elsif ( 'HASH' eq ref $list ) {
+        return scalar grep { $val == $list->{$_} } keys %$list;
+    } else {
+        return 0;
+    }
+}
+
+sub usage {
+    print "
+    >> [Usage]
+        [你可以自訂程序名稱 ( default: 'toppath' )] 使用
+    -name 或 -n '程序名稱',
+
+        [你可以自訂 inspect port 的數值 ( defult: 4001 )] 使用
+    -port 或 -p '阜號'
+
+        [求救]
+    -h 或 -help
+    ";
+}
+real();
